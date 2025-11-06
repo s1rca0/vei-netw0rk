@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>VEI Netw0rk — Typing Teaser</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark" />
+  <style>
+    :root { --phosphor:#00FF95; }
+    html,body{height:100%;margin:0;background:#000;color:var(--phosphor)}
+    body{display:grid;place-items:center}
+    .wrap{max-width:90vw}
+    p{
+      font:700 60px/1.1 "JetBrains Mono", Menlo, Monaco, monospace;
+      margin:0; white-space:nowrap; overflow:hidden; letter-spacing:.02em;
+      text-shadow:0 0 6px rgba(0,255,149,.2);
+    }
+    /* Block cursor */
+    .cursor{
+      display:inline-block;
+      width:0.65ch;
+      height:1em;
+      background:var(--phosphor);
+      vertical-align:-0.15em;
+      animation:blink .8s steps(1,end) infinite;
+    }
+    @keyframes blink { 50% { opacity:0 } }
+    @media (max-width: 500px){ p{font-size:36px} }
+
+    /* Fade out when leaving */
+    .fade { transition: opacity .6s ease; opacity:1 }
+    .fade.hide { opacity:0 }
+
+    /* Reduced motion: keep cursor visible but don’t blink wildly */
+    @media (prefers-reduced-motion: reduce){
+      .cursor{ animation:blink 1.6s steps(1,end) infinite; }
+    }
+
+    /* Hidden skip/continue button for keyboard only (optional) */
+    .skip {
+      position:fixed; inset:auto 12px 12px auto; background:#001a14; color:var(--phosphor);
+      border:1px solid color-mix(in lab, var(--phosphor) 40%, #000);
+      border-radius:8px; padding:8px 10px; font:600 12px/1 "JetBrains Mono", monospace; cursor:pointer;
+      opacity:.4;
+    }
+    .skip:focus-visible { outline:2px solid var(--phosphor); opacity:1 }
+  </style>
+</head>
+<body>
+  <div class="wrap fade" id="root" role="status" aria-live="polite" aria-atomic="true">
+    <p><span id="text"></span><span id="cursor" class="cursor" aria-hidden="true"></span></p>
+  </div>
+  <button class="skip" id="skip" aria-label="Skip teaser and continue" hidden>skip</button>
+
+  <script>
+  // --- Params & Defaults ------------------------------------------------------
+  const q = new URLSearchParams(location.search);
+  const MSG = decodeURIComponent(q.get('msg') || 'The Matrix has you.');
+  const TYPE_MS = +(q.get('speed') || 100);
+  const PRE_MS  = +(q.get('pre')   || 1000);
+  const POST_MS = +(q.get('post')  || 3000);
+  const BLANK_MS= +(q.get('blank') || 1000);
+  const CYCLES  = q.has('cycles') ? Math.max(1, +q.get('cycles')) : Infinity;
+  const NEXT    = q.get('next'); // e.g., /index.html
+
+  // --- Elements ---------------------------------------------------------------
+  const textEl = document.getElementById('text');
+  const cursorEl = document.getElementById('cursor');
+  const root = document.getElementById('root');
+  const skipBtn = document.getElementById('skip');
+
+  const prefersReduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+  // Show skip on keyboard use
+  let showedSkip = false;
+  const showSkip = () => { if(!showedSkip){ skipBtn.hidden = false; showedSkip = true; } };
+  window.addEventListener('keydown', showSkip, { once:true });
+  skipBtn.addEventListener('click', hardExit);
+
+  // Space/Enter to hard-exit
+  document.addEventListener('keydown', (e)=>{
+    if(e.key === 'Enter' || e.key === ' '){ e.preventDefault(); hardExit(); }
+  });
+
+  function hardExit(){
+    // Fade and redirect if NEXT provided; otherwise just fade
+    root.classList.add('hide');
+    if(NEXT){
+      setTimeout(()=> location.href = NEXT, 650);
+    }
+  }
+
+  async function typeOnce(msg){
+    textEl.textContent = "";
+    cursorEl.style.display = "inline-block";
+    if (prefersReduced) {
+      // Accessibility-friendly: no per-char animation
+      textEl.textContent = msg;
+      await sleep(POST_MS);
+      return;
+    }
+    await sleep(PRE_MS);
+    for(let i=1;i<=msg.length;i++){
+      textEl.textContent = msg.slice(0,i);
+      await sleep(TYPE_MS);
+    }
+    await sleep(POST_MS);
+  }
+
+  async function cycle(){
+    let loops = 0;
+    while(loops < CYCLES){
+      await typeOnce(MSG);
+      // Blank frame
+      textEl.textContent = "";
+      cursorEl.style.display = "none";
+      if (!prefersReduced) await sleep(BLANK_MS);
+      loops++;
+    }
+  }
+
+  (async () => {
+    try {
+      await cycle();
+    } finally {
+      hardExit(); // fade (and redirect if NEXT set)
+    }
+  })();
+  </script>
+</body>
+</html>

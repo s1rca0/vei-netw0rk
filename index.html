@@ -1,0 +1,945 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>VEI Netw0rk — Veritas et Iustitia</title>
+
+  <!--
+    VEI Netw0rk — Frontend V1 (readable + annotated)
+    Includes:
+      • A1 Round Engine (mock state machine + timers)
+      • A2 Cross-Exam Host Approvals (pending → approve → publish at phase boundary)
+      • A3 Judge & Jury (sliders + clarity vote → summary → archive card)
+      • Role-Gating (architect-only controls + judge access)
+      • Admin Console (UI-only stubs)
+      • Terminal-style chat dock (local mock)
+      • Matrix rain backdrop
+    Backend TODOs are marked with  ▶ TODO:
+  -->
+
+  <style>
+    :root{
+      --bg:#000;
+      --fg:#CFEFE3;
+      --green:#00FF95;
+      --cyan:#7AE7FF;
+      --muted:#89A79D;
+    }
+    html,body{height:100%;}
+    body{
+      margin:0; background:var(--bg); color:var(--fg);
+      font-family:"JetBrains Mono", Menlo, Monaco, "Courier New", monospace;
+      overflow:hidden; /* canvas backdrop fills screen */
+    }
+
+    /* Matrix canvas backdrop */
+    #matrix{position:fixed; inset:0; z-index:-1; background:#000;}
+
+    header{position:relative; padding:28px 24px 8px; letter-spacing:0.06em;}
+    .brand{font-size:20px; color:var(--green);}
+    .tag{color:var(--cyan); opacity:.9; font-size:12px; margin-top:4px;}
+
+    /* Primary nav */
+    nav.primary{
+      position:sticky; top:0; z-index:5; display:flex; gap:10px; padding:10px 24px;
+      background:linear-gradient(180deg,#000 70%,transparent); border-bottom:1px solid #00FF951a
+    }
+    nav.primary .navlink{
+      appearance:none; border:1px solid #00FF9526; background:transparent; color:var(--fg);
+      padding:8px 10px; border-radius:6px; cursor:pointer; font-weight:600
+    }
+    nav.primary .navlink.active{border-color:var(--green); color:var(--green)}
+    .role-badge{margin-left:auto; border:1px solid #00FF9540; padding:4px 8px; border-radius:999px; font-size:11px; color:var(--cyan)}
+    .role-select{appearance:none; background:transparent; color:var(--fg); border:1px solid #00FF9540; border-radius:6px; padding:6px 8px}
+    .badge.route{margin-left:6px}
+
+    main{position:relative; padding:24px; display:grid; gap:22px; max-width:1050px;}
+
+    /* Hero (Home) */
+    .hero{
+      border:1px solid color-mix(in lab, var(--green) 25%, #000);
+      background:linear-gradient( to bottom, #000a, #000d 40%, #00150f 100% );
+      border-radius:10px; padding:22px; display:grid; gap:14px;
+      box-shadow:0 0 0 1px #00FF9526, 0 10px 30px #00FF9512 inset;
+    }
+    .hero h1{margin:0; font-size:28px; color:var(--fg);}
+    .hero p{margin:0; color:var(--muted);}
+
+    /* Common UI */
+    .row{display:flex; gap:12px; flex-wrap:wrap; align-items:center}
+    .btn{
+      appearance:none; border:1px solid var(--green); color:#00150E; background:var(--green);
+      padding:10px 14px; border-radius:8px; font-weight:600; text-decoration:none; cursor:pointer;
+    }
+    .btn.ghost{background:transparent; color:var(--green);}
+    .btn.tiny{padding:6px 8px; font-size:11px}
+    .links{display:flex; gap:10px; flex-wrap:wrap}
+    .pane{display:grid; gap:10px; padding:16px; border:1px dashed #00FF9540; border-radius:8px; background:#00150e80;}
+    .mono{font-family:inherit; font-size:12px; color:var(--cyan)}
+    .note{font-size:12px; color:var(--muted)}
+    footer{position:fixed; bottom:0; left:0; right:0; padding:10px 14px; color:#7fa; font-size:11px; opacity:.8}
+    code.kbd{border:1px solid #00FF9550; padding:2px 6px; border-radius:6px; font-size:11px; color:var(--green)}
+    video{width:100%; max-height:55vh; border-radius:8px; background:#000}
+
+    /* Router */
+    section.route{display:none}
+    section.route.active{display:block}
+
+    /* --- Debate Arena (mock) with Live Commentary Lanes --- */
+    .arena{display:grid; gap:16px; border:1px solid #00FF9530; border-radius:10px; padding:16px; background:#0009}
+    .arena .head{display:flex; align-items:center; justify-content:space-between; gap:12px}
+    .arena .head .title{font-weight:700; letter-spacing:.06em}
+    .arena .toggles{display:flex; gap:8px; align-items:center}
+    .arena .badge{border:1px solid #00FF9540; color:var(--green); padding:4px 8px; border-radius:999px; font-size:11px}
+    .arena .grid{display:grid; grid-template-columns: 1.2fr .8fr; gap:14px}
+    .stage{min-height:300px; border:1px dashed #00FF9540; border-radius:8px; padding:12px; background:linear-gradient(180deg,#00150e70,#000a)}
+    .stage .mirror{font-size:12px; color:var(--muted); display:flex; align-items:center; gap:8px; margin-bottom:8px}
+    .stage .topic{font-size:18px; margin:6px 0 10px}
+    .lanes{display:grid; grid-template-rows:auto 1fr; border:1px dashed #00FF9540; border-radius:8px; background:#00150e80; overflow:hidden}
+    .lane-tabs{display:flex; border-bottom:1px solid #00FF9530}
+    .lane-tab{flex:1; padding:10px; text-align:center; cursor:pointer; font-weight:600; font-size:12px; color:var(--cyan); background:transparent; border:none; border-right:1px solid #00FF951a}
+    .lane-tab:last-child{border-right:none}
+    .lane-tab[aria-selected="true"]{background:#001e17}
+    .lane-panel{display:none; padding:10px; overflow:auto}
+    .lane-panel.active{display:block}
+    .consent-banner{display:flex; align-items:center; justify-content:space-between; gap:10px; background:#140f00; border-top:1px solid #ffdd0060; color:#ffd400; padding:8px 10px}
+    .queue{display:grid; gap:6px; margin-top:8px}
+    .queue .item{padding:8px; border:1px solid #00FF9530; border-radius:6px; background:#000}
+    #timerBadge{color:var(--fg)}
+    #stateBadge{color:var(--cyan)}
+    @media (max-width: 980px){ .arena .grid{grid-template-columns:1fr} }
+
+    /* a11y affordances */
+    .sr-only{position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0}
+    :focus-visible{outline:2px solid var(--cyan); outline-offset:2px}
+    .lane-tab:focus-visible{background:#00241c}
+
+    /* Chat Dock (terminal style) */
+    .chat-dock{
+      position:fixed; right:16px; bottom:16px; width:360px; max-width:90vw; height:420px; max-height:70vh;
+      background:#020b08f2; border:1px solid #00FF9540; border-radius:10px; display:none; grid-template-rows:auto 1fr auto; box-shadow:0 10px 40px #0008
+    }
+    .chat-dock.active{display:grid}
+    .chat-head{display:flex; align-items:center; justify-content:space-between; padding:8px 10px; border-bottom:1px solid #00FF9530}
+    .chat-head .title{font-weight:700; letter-spacing:.06em}
+    .chat-body{padding:10px; overflow:auto; display:grid; gap:8px; font-size:12px}
+    .msg{display:grid; gap:4px; background:#000; border:1px solid #00FF9520; border-radius:8px; padding:8px}
+    .msg .from{color:var(--cyan); font-weight:700}
+    .chat-foot{display:flex; gap:8px; padding:8px; border-top:1px solid #00FF9530}
+    .chat-foot input{flex:1; background:#000; border:1px solid #00FF9540; color:var(--fg); border-radius:6px; padding:10px}
+    .chat-foot .send{border:1px solid var(--green); background:var(--green); color:#00150E; border-radius:6px; padding:10px 12px; font-weight:700}
+    .chat-toggle{position:fixed; right:16px; bottom:16px; z-index:4; border:1px solid #00FF9540; background:#00150e; color:var(--green); border-radius:999px; padding:10px 12px; cursor:pointer}
+    @media (max-width:720px){ .chat-dock{height:60vh} }
+
+    /* Host Approvals Modal */
+    .modal{position:fixed; inset:0; display:none; place-items:center; z-index:20}
+    .modal.active{display:grid}
+    .modal .scrim{position:absolute; inset:0; background:#000c; backdrop-filter:blur(2px)}
+    .modal .card{position:relative; z-index:1; width:min(640px,90vw); max-height:80vh; overflow:auto; background:#00150e; border:1px solid #00FF9540; border-radius:10px; padding:14px; display:grid; gap:10px}
+    .modal .card h3{margin:0}
+    .pending-list{display:grid; gap:8px}
+    .pending-item{display:grid; gap:8px; border:1px solid #00FF9530; border-radius:8px; padding:10px; background:#000}
+    .pending-item .actions{display:flex; gap:8px; justify-content:flex-end}
+    .pill{display:inline-block; padding:2px 8px; border:1px solid #00FF9530; border-radius:999px; font-size:11px; color:var(--cyan)}
+
+    /* Admin Console */
+    .admin-grid{display:grid; gap:12px}
+    .card{border:1px solid #00FF9530; border-radius:10px; padding:12px; background:#000}
+    .card h3{margin:0 0 8px 0}
+    .forbidden{border:1px solid #ff555540; background:#1a0000}
+
+    /* Judge & Jury UI (A3) */
+    .judge{display:grid; gap:10px; margin-top:10px; border-top:1px solid #00FF9530; padding-top:10px}
+    .judge .grid{display:grid; gap:10px; grid-template-columns:1fr 1fr}
+    .judge label{display:grid; gap:6px; font-size:12px; color:var(--cyan)}
+    .judge input[type="range"]{width:100%}
+    .summary-card{border:1px solid #00FF9530; border-radius:8px; padding:10px; background:#000}
+
+    /* Optional “disabled” look if we choose disable-over-hide for host controls */
+    .host-disabled{opacity:.45; pointer-events:none; filter:grayscale(.2)}
+  </style>
+</head>
+<body>
+  <canvas id="matrix" aria-hidden="true"></canvas>
+
+  <header>
+    <div class="brand">VEI Netw0rk</div>
+    <div class="tag">Veritas et Iustitia — Architected Signal</div>
+  </header>
+
+  <nav class="primary" aria-label="Primary">
+    <button class="navlink" data-route="home">Home</button>
+    <button class="navlink" data-route="dojo">Dojo</button>
+    <button class="navlink" data-route="lantern">Lantern</button>
+    <button class="navlink" data-route="archives">Archives</button>
+    <button class="navlink" data-route="gov">Governance</button>
+    <button class="navlink" data-route="about">About</button>
+    <button class="navlink" data-route="admin">Admin</button>
+    <span class="role-badge">role:
+      <select id="roleSelect" class="role-select">
+        <option value="guest">guest</option>
+        <option value="citizen">citizen</option>
+        <option value="custodian">custodian</option>
+        <option value="architect">architect</option>
+      </select>
+    </span>
+    <span class="badge route" id="routeBadge">route: home</span>
+  </nav>
+
+  <main>
+    <!-- ===========================
+         HOME
+         =========================== -->
+    <section class="hero route active" data-route="home" aria-label="Home">
+      <h1>Signal through noise.</h1>
+      <p>Intro bumper & identity lab for the VEI Netw0rk. Load a local render to preview; quick-validate checks duration.</p>
+
+      <div class="row">
+        <label class="btn" for="filepick">Load local video</label>
+        <input id="filepick" type="file" accept="video/mp4,video/quicktime" hidden />
+        <button class="btn ghost" id="validateBtn" title="Runs lightweight client checks (duration)">Quick validate</button>
+      </div>
+
+      <video id="player" controls preload="metadata" src=""></video>
+
+      <section class="pane" aria-label="Round Engine Spec">
+        <h2 style="margin:0">Round Engine — State Machine (v0.1)</h2>
+        <p class="mono">Authoritative flow that drives all matches. Chat, scoring, lanes, and archives are observers of this state.</p>
+        <pre class="mono" style="white-space:pre-wrap">States:
+  lobby → intro → opening_A → opening_B → cross_A → cross_B → rebuttal_A → rebuttal_B → steelman_A → steelman_B → closing_A → closing_B → judge → archive
+
+Aux states:
+  paused (interrupt), cancelled (terminal), error (terminal)
+
+Events:
+  CREATE_MATCH, START, ADVANCE, PAUSE, RESUME, TIMEOUT, FORFEIT, ABORT,
+  ELEVATE_QUESTION, CONSENT_SET, INTENSITY_SET, SCORE_SUBMIT, JURY_VOTE, FINALIZE
+
+Transitions (core):
+  lobby   --START--> intro
+  intro   --ADVANCE--> opening_A
+  opening_A --TIMEOUT|ADVANCE--> opening_B
+  opening_B --TIMEOUT|ADVANCE--> cross_A
+  cross_A --TIMEOUT|ADVANCE--> cross_B
+  cross_B --TIMEOUT|ADVANCE--> rebuttal_A
+  rebuttal_A --TIMEOUT|ADVANCE--> rebuttal_B
+  rebuttal_B --TIMEOUT|ADVANCE--> steelman_A
+  steelman_A --ADVANCE--> steelman_B
+  steelman_B --ADVANCE--> closing_A
+  closing_A --TIMEOUT|ADVANCE--> closing_B
+  closing_B --ADVANCE--> judge
+  judge --FINALIZE--> archive
+
+Round Timers (defaults):
+  opening: 90s, cross: 60s, rebuttal: 60s, steelman: 60s, closing: 45s
+
+Cross-Exam Queue Handoff:
+  During cross_* phases, host may emit ELEVATE_QUESTION(items[]) which append to the queue; debaters see them only at the next phase boundary.
+
+Read-Only Mirror Policy:
+  When { state ∈ livePhases } → lanes hidden from debaters, visible to spectators.
+</pre>
+        <p class="note">Design-time documentation embedded in the page for convenience. The live engine mock mirrors this spec.</p>
+      </section>
+    </section>
+
+    <!-- ===========================
+         DOJO / ARENA (A1/A2/A3)
+         =========================== -->
+    <section class="arena route" data-route="dojo" id="arenaMock" aria-label="Debate Arena Mock">
+      <div class="head">
+        <div class="title">Debate Arena — Mock (UI sketch)</div>
+        <div class="toggles">
+          <label class="badge"><input type="checkbox" id="asDebater"/> View as Debater</label>
+          <label class="badge"><input type="checkbox" id="roundActive"/> Round Active</label>
+          <span class="badge" id="intensityBadge">STANDARD</span>
+          <span class="badge" id="stateBadge">STATE: lobby</span>
+
+          <!-- Host-only controls (role-gated) -->
+          <button class="btn tiny" id="btnStart"  title="START"           data-host-only>Start</button>
+          <button class="btn tiny" id="btnAdvance" title="ADVANCE"        data-host-only>Advance</button>
+          <button class="btn tiny" id="btnPause"   title="PAUSE"          data-host-only>Pause</button>
+          <button class="btn tiny" id="btnResume"  title="RESUME"         data-host-only>Resume</button>
+          <button class="btn tiny" id="btnReset"   title="Reset to lobby" data-host-only>Reset</button>
+
+          <span class="badge" id="timerBadge">⏱ 00:00</span>
+        </div>
+      </div>
+
+      <div class="grid">
+        <!-- Stage (read-only mirror during rounds) -->
+        <div class="stage" aria-live="polite">
+          <div class="mirror" id="mirrorState">Read-Only Mirror: <strong>ON</strong> <span class="note">(debaters cannot see lanes while active)</span></div>
+          <div class="topic">Topic: <em>Does truth have an intrinsic thermodynamic signature?</em></div>
+          <div class="note">Left pane represents the live stage. During active rounds, spectators see a read-only mirror; debaters see only the stage.</div>
+
+          <!-- Cross-Exam Queue -->
+          <div class="queue" id="crossExamQueue" aria-live="polite">
+            <div class="note">Cross-Exam Queue (host-elevated spectator questions):</div>
+            <div class="row" style="margin-top:6px">
+              <span class="pill">Host approvals: <span id="pendingCount">0</span> pending</span>
+              <button class="btn tiny" id="reviewPending" data-host-only>Review</button>
+            </div>
+          </div>
+
+          <!-- A3 Judge mount point -->
+          <div id="judgeMount"></div>
+        </div>
+
+        <!-- Lanes (Commentary · Jury · Coach) -->
+        <aside class="lanes" aria-label="Live Commentary Lanes">
+          <div class="lane-tabs" role="tablist" aria-label="Lanes">
+            <button class="lane-tab" role="tab" aria-selected="true"  aria-controls="lane-commentary" id="tab-commentary">Commentary</button>
+            <button class="lane-tab" role="tab" aria-selected="false" aria-controls="lane-jury"        id="tab-jury">Jury</button>
+            <button class="lane-tab" role="tab" aria-selected="false" aria-controls="lane-coach"       id="tab-coach">Coach</button>
+          </div>
+
+          <div id="lane-commentary" class="lane-panel active" role="tabpanel" aria-labelledby="tab-commentary">
+            <h2 class="sr-only">Commentary Lane</h2>
+            <div class="note">Spectator chat with emoji/GIFs. Hidden from debaters during active rounds.</div>
+            <div class="queue">
+              <div class="item">@spectator_1: 🔥 Point about entropy vs information density.</div>
+              <div class="item">@spectator_2: Link: <a href="#">paper.example/entropy-order</a></div>
+              <!-- Host promotion control is also role-gated -->
+              <div class="item">
+                @host: Promote this Q →
+                <button class="btn tiny"
+                        data-promote="What is your falsifier if HRV effects vanish under control?"
+                        data-host-only>
+                  Add to Cross-Exam
+                </button>
+              </div>
+            </div>
+            <!-- Consent banner for high-intensity mode -->
+            <div class="consent-banner" id="matureBanner" hidden>
+              <span>High-Intensity Mode • Mature content enabled</span>
+              <button class="btn tiny ghost" id="revokeConsent">Revoke audience consent</button>
+            </div>
+          </div>
+
+          <div id="lane-jury" class="lane-panel" role="tabpanel" aria-labelledby="tab-jury">
+            <div class="note">Structured notes + clarity votes (slow-mode). Host may keep private.</div>
+            <div class="queue">
+              <div class="item">Jury note: Answer lacked warrant for ψ–T conservation claim.</div>
+              <div class="item">Clarity vote: A 62% · B 38%</div>
+            </div>
+          </div>
+
+          <div id="lane-coach" class="lane-panel" role="tabpanel" aria-labelledby="tab-coach">
+            <div class="note">Private team chat per contender. Never cross-visible.</div>
+            <div class="queue">
+              <div class="item">Coach: Breathe. Lead with definition; then example; then contrast.</div>
+            </div>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <!-- ===========================
+         LANTERN
+         =========================== -->
+    <section class="pane route" data-route="lantern" aria-label="Lantern">
+      <h2 style="margin:0">Project Lantern</h2>
+      <p class="note">Open-source biofeedback prototype (Ring), SpectrumCore, and Bridge Server. This pane will host the CI visualizer and firmware links.</p>
+      <!-- ▶ TODO: link firmware docs + CI build artifacts once backend registry exists -->
+    </section>
+
+    <!-- ===========================
+         ARCHIVES
+         =========================== -->
+    <section class="pane route" data-route="archives" aria-label="Archives">
+      <h2 style="margin:0">Archives</h2>
+      <p class="note">Unified search over VEI corpus. Index TOE, Synchronicity, Continuity, Lantern, and Dojo logs.</p>
+      <div class="row">
+        <input id="searchBox" placeholder="Search archives (draft)"
+               style="flex:1; background:#000; border:1px solid #00FF9540; color:var(--fg); padding:10px; border-radius:6px" />
+        <button class="btn tiny" id="searchBtn">Search</button>
+      </div>
+      <div id="searchResults" class="queue"></div>
+      <!-- ▶ TODO: wire to /api/search (Railway), stream results, and attach filters -->
+    </section>
+
+    <!-- ===========================
+         GOVERNANCE
+         =========================== -->
+    <section class="pane route" data-route="gov" aria-label="Governance">
+      <h2 style="margin:0">Governance</h2>
+      <p class="note">Zion Covenant, proposals, and future voting. Read-only for V1.</p>
+      <!-- ▶ TODO: proposals feed; wallet/identity binding; audit log visibility rules -->
+    </section>
+
+    <!-- ===========================
+         ABOUT
+         =========================== -->
+    <section class="pane route" data-route="about" aria-label="About">
+      <h2 style="margin:0">About VEI</h2>
+      <p class="note">Veritas et Iustitia — Architected Signal. This site unifies Debate Dojo, Project Lantern, Archives, and Governance.</p>
+    </section>
+
+    <!-- ===========================
+         ADMIN CONSOLE (UI shell)
+         =========================== -->
+    <section class="pane route" data-route="admin" aria-label="Admin Console">
+      <h2 style="margin:0">Admin Console</h2>
+
+      <div id="adminForbidden" class="card forbidden" hidden>
+        <h3>403 — Forbidden</h3>
+        <div class="note">You need the <strong>architect</strong> role to access the command center.</div>
+      </div>
+
+      <div id="adminGrid" class="admin-grid" hidden>
+        <div class="card">
+          <h3>Ops</h3>
+          <div class="note">Live matches, approvals, locks.</div>
+          <div class="row">
+            <button class="btn tiny" id="opsListMatches">List matches</button>
+            <button class="btn tiny" id="opsForcePause">Force pause</button>
+            <button class="btn tiny" id="opsForceEnd">Force end</button>
+          </div>
+          <div id="opsOut" class="queue"></div>
+          <!-- ▶ TODO: wire to /api/matches (list/pause/end). Auth required (architect). -->
+        </div>
+
+        <div class="card">
+          <h3>Security</h3>
+          <div class="note">Headers & shields (CSP/HSTS/COOP/COEP), rate limits (UI only).</div>
+          <div class="row">
+            <button class="btn tiny" id="secShowHeaders">Show active headers</button>
+            <button class="btn tiny" id="secTestRate">Simulate rate-limit</button>
+          </div>
+          <div id="secOut" class="queue"></div>
+          <!-- ▶ TODO: surface real rate-limit counters + IP reputation telemetry -->
+        </div>
+
+        <div class="card">
+          <h3>Data</h3>
+          <div class="note">Retention policies, export stubs.</div>
+          <div class="row">
+            <button class="btn tiny" id="dataList">List retention rules</button>
+            <button class="btn tiny" id="dataExport">Export my data</button>
+          </div>
+          <div id="dataOut" class="queue"></div>
+          <!-- ▶ TODO: /api/retention (list/update); /api/export (async job + signed URL) -->
+        </div>
+
+        <div class="card">
+          <h3>Observability</h3>
+          <div class="note">Connections, message throughput, error spikes (mock).</div>
+          <div class="row">
+            <button class="btn tiny" id="obsPulse">Refresh metrics</button>
+          </div>
+          <div id="obsOut" class="queue"></div>
+          <!-- ▶ TODO: hook to metrics endpoint or push via WebSocket channel -->
+        </div>
+      </div>
+    </section>
+
+    <!-- ===========================
+         Chat Dock (terminal-style)
+         =========================== -->
+    <button class="chat-toggle" id="chatToggle" aria-controls="chatDock" aria-expanded="false">Chat</button>
+    <div class="chat-dock" id="chatDock" role="dialog" aria-label="VEI Chat Dock" aria-modal="false">
+      <div class="chat-head">
+        <div class="title">vei-netw0rk — chat</div>
+        <button class="btn tiny ghost" id="chatClose">Close</button>
+      </div>
+      <div class="chat-body" id="chatBody">
+        <div class="msg"><div class="from">system</div><div>Welcome to the terminal chat. Press <code class="kbd">Ctrl/⌘+K</code> to toggle, type to send.</div></div>
+      </div>
+      <div class="chat-foot">
+        <input id="chatInput" placeholder="> enter message" />
+        <button class="send" id="chatSend">Send</button>
+      </div>
+      <!-- ▶ TODO: real chat via WS; DMs, rooms, attachments; content policy + safety gates -->
+    </div>
+
+    <!-- Host Approvals Modal -->
+    <div class="modal" id="pendingModal" role="dialog" aria-modal="true" aria-labelledby="pendingTitle">
+      <div class="scrim" id="pendingClose"></div>
+      <div class="card">
+        <h3 id="pendingTitle">Cross-Exam — Pending Promotions</h3>
+        <div class="note">Approve questions to publish at the <strong>next phase boundary</strong>. Declined items are discarded.</div>
+        <div class="pending-list" id="pendingList"></div>
+        <div class="row" style="justify-content:flex-end">
+          <button class="btn tiny ghost" id="pendingCloseBtn">Close</button>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <footer>
+    Tip: Double-click a file in Explorer to pin its tab. Disable preview via <code class="kbd">Settings → workbench.editor.enablePreview</code>.
+  </footer>
+
+  <script>
+    /* ==============================
+       Matrix rain backdrop
+       ============================== */
+    const c = document.getElementById('matrix');
+    const ctx = c.getContext('2d');
+    let w,h,cols,y;
+    function resize(){
+      w = c.width = window.innerWidth; h = c.height = window.innerHeight;
+      const fontSize = 14; ctx.font = fontSize+"px JetBrains Mono, monospace";
+      cols = Math.floor(w / fontSize);
+      y = Array(cols).fill(0);
+    }
+    function draw(){
+      ctx.fillStyle = 'rgba(0,0,0,0.08)'; ctx.fillRect(0,0,w,h);
+      ctx.fillStyle = '#00FF95';
+      for(let i=0;i<cols;i++){
+        const ch = String.fromCharCode(0x30A0 + Math.random()*96);
+        ctx.fillText(ch, i*14, y[i]*14);
+        y[i] = (y[i]*14 > h || Math.random() > 0.975) ? 0 : y[i]+1;
+      }
+      requestAnimationFrame(draw);
+    }
+    window.addEventListener('resize', resize); resize(); draw();
+
+    /* ==============================
+       Home — local video quick validate
+       ============================== */
+    const filepick = document.getElementById('filepick');
+    const player = document.getElementById('player');
+    const validateBtn = document.getElementById('validateBtn');
+
+    filepick?.addEventListener('change', () => {
+      const f = filepick.files[0];
+      if(!f) return;
+      player.src = URL.createObjectURL(f);
+    });
+
+    validateBtn?.addEventListener('click', () => {
+      const src = player?.currentSrc;
+      if(!src){ alert('Load a video first.'); return; }
+      const d = player.duration || 0;
+      const okDur = d>=8 && d<=10;
+      const msg = [
+        `Duration: ${d.toFixed(2)}s ${okDur ? '✓' : '✗ (need 8–10s)'}`,
+        `Spec check (full validation requires terminal script).`
+      ].join('\\n');
+      alert(msg);
+    });
+
+    /* ==============================
+       Dojo Lanes UI sketch logic
+       ============================== */
+    const tabs = Array.from(document.querySelectorAll('.lane-tab'));
+    const panels = Array.from(document.querySelectorAll('.lane-panel'));
+    tabs.forEach(t=>t.addEventListener('click', ()=>{
+      tabs.forEach(x=>x.setAttribute('aria-selected','false'));
+      t.setAttribute('aria-selected','true');
+      panels.forEach(p=>p.classList.remove('active'));
+      const target = document.getElementById(t.getAttribute('aria-controls'));
+      if(target) target.classList.add('active');
+    }));
+
+    const asDebater = document.getElementById('asDebater');
+    const roundActive = document.getElementById('roundActive');
+    const lanes = document.querySelector('.lanes');
+    const mirrorState = document.getElementById('mirrorState');
+    const queue = document.getElementById('crossExamQueue');
+    const intensityBadge = document.getElementById('intensityBadge');
+    const matureBanner = document.getElementById('matureBanner');
+
+    function updateIsolation(){
+      const active = !!roundActive.checked;
+      const debater = !!asDebater.checked;
+      lanes.style.display = (debater && active) ? 'none' : 'grid';
+      mirrorState.innerHTML = `Read-Only Mirror: <strong>${active ? 'ON' : 'OFF'}</strong> <span class="note">${active ? '(debaters cannot see lanes while active)' : '(post-round review unlocked)'}<\/span>`;
+    }
+    asDebater?.addEventListener('change', updateIsolation);
+    roundActive?.addEventListener('change', updateIsolation);
+    updateIsolation();
+
+    // a11y: keyboard nav for lane tabs
+    const tablist = document.querySelector('.lane-tabs');
+    tablist?.addEventListener('keydown', (e)=>{
+      const idx = tabs.findIndex(t=>t.getAttribute('aria-selected')==='true');
+      if(e.key==='ArrowRight' || e.key==='ArrowLeft' || e.key==='Home' || e.key==='End'){
+        e.preventDefault();
+        let next = idx;
+        if(e.key==='ArrowRight') next = (idx+1)%tabs.length;
+        if(e.key==='ArrowLeft') next = (idx-1+tabs.length)%tabs.length;
+        if(e.key==='Home') next = 0;
+        if(e.key==='End') next = tabs.length-1;
+        tabs[next].focus(); tabs[next].click();
+      }
+      if(e.key==='Escape'){ document.querySelector('.stage')?.focus?.(); }
+    });
+
+    // Persist small UI state
+    const LS_KEY = 'vei_dojo_ui_state';
+    function saveState(){
+      const state = { debater: !!asDebater.checked, active: !!roundActive.checked, intensity: intensityBadge.textContent };
+      try{ localStorage.setItem(LS_KEY, JSON.stringify(state)); }catch(err){}
+    }
+    function loadState(){
+      try{
+        const raw = localStorage.getItem(LS_KEY); if(!raw) return;
+        const s = JSON.parse(raw);
+        if(s.debater) asDebater.checked = true;
+        if(s.active) roundActive.checked = true;
+        if(s.intensity === 'HIGH-INTENSITY'){ intensityBadge.textContent = 'HIGH-INTENSITY'; matureBanner.hidden = false; }
+      }catch(err){}
+    }
+    loadState(); updateIsolation();
+    asDebater?.addEventListener('change', saveState);
+    roundActive?.addEventListener('change', saveState);
+
+    /* ==============================
+       A2 — Cross-Exam Host Approvals (pending → approve → publish)
+       ============================== */
+    const pending = [];   // {id, text, by, ts}
+    const approved = [];  // publish at next phase boundary
+    const pendingCountEl = document.getElementById('pendingCount');
+    const reviewBtn = document.getElementById('reviewPending');
+    const pendingModal = document.getElementById('pendingModal');
+    const pendingList = document.getElementById('pendingList');
+    const pendingClose = document.getElementById('pendingClose');
+    const pendingCloseBtn = document.getElementById('pendingCloseBtn');
+
+    function uid(){ return Math.random().toString(36).slice(2,10); }
+    function openPending(){ renderPending(); pendingModal.classList.add('active'); }
+    function closePending(){ pendingModal.classList.remove('active'); }
+    function renderPending(){
+      pendingList.innerHTML = '';
+      if(pending.length===0){
+        const empty = document.createElement('div'); empty.className='note'; empty.textContent='No pending items.'; pendingList.appendChild(empty);
+      } else {
+        pending.forEach(item=>{
+          const wrap = document.createElement('div'); wrap.className='pending-item';
+          const text = document.createElement('div'); text.textContent = item.text;
+          const meta = document.createElement('div'); meta.className='note'; meta.textContent = `by @${item.by} • ${new Date(item.ts).toLocaleTimeString()}`;
+          const actions = document.createElement('div'); actions.className='actions';
+          const approveBtn = document.createElement('button'); approveBtn.className='btn tiny'; approveBtn.textContent='Approve';
+          const declineBtn = document.createElement('button'); declineBtn.className='btn tiny ghost'; declineBtn.textContent='Decline';
+          approveBtn.addEventListener('click', ()=>{ const idx=pending.findIndex(p=>p.id===item.id); if(idx>-1){ approved.push(pending[idx]); pending.splice(idx,1); updatePendingCount(); renderPending(); }});
+          declineBtn.addEventListener('click', ()=>{ const idx=pending.findIndex(p=>p.id===item.id); if(idx>-1){ pending.splice(idx,1); updatePendingCount(); renderPending(); }});
+          actions.appendChild(approveBtn); actions.appendChild(declineBtn);
+          wrap.appendChild(text); wrap.appendChild(meta); wrap.appendChild(actions);
+          pendingList.appendChild(wrap);
+        });
+      }
+    }
+    function updatePendingCount(){ pendingCountEl.textContent = String(pending.length); }
+    reviewBtn?.addEventListener('click', openPending);
+    pendingClose?.addEventListener('click', closePending);
+    pendingCloseBtn?.addEventListener('click', closePending);
+    document.addEventListener('keydown', (e)=>{ if(e.key==='Escape' && pendingModal.classList.contains('active')) closePending(); });
+
+    // Promote → pending (role-gated)
+    document.addEventListener('click', (e)=>{
+      const btn = e.target.closest('[data-promote]');
+      if(!btn) return;
+      if(!isArchitect()) { return; } // role gate
+      const text = btn.getAttribute('data-promote');
+      const by = (btn.closest('.item')?.textContent || 'spectator').replace(/:.*/, '').replace('@','') || 'spectator';
+      pending.push({ id: uid(), text, by, ts: Date.now() }); updatePendingCount(); openPending();
+    });
+
+    // Publish approved at phase boundary
+    function publishApproved(){
+      if(approved.length===0) return;
+      approved.splice(0).forEach(item=>{
+        const div = document.createElement('div'); div.className='item'; div.textContent = `Q: ${item.text}`; queue.appendChild(div);
+      });
+    }
+
+    /* ==============================
+       A3 — Judge & Jury
+       ============================== */
+    function renderJudgePanel() {
+      const mount = document.getElementById('judgeMount');
+      if(!mount) return;
+      mount.innerHTML = `
+        <div class="judge">
+          <div class="note">Judge the bout with rubric sliders. Jury clarity vote is a quick pulse.</div>
+          <div class="grid">
+            <div>
+              <label>Coherence (A)
+                <input type="range" id="cohA" min="0" max="10" step="1" value="6">
+              </label>
+              <label>Steelman (A)
+                <input type="range" id="stmA" min="0" max="10" step="1" value="6">
+              </label>
+              <label>Tone (A)
+                <input type="range" id="tonA" min="0" max="10" step="1" value="6">
+              </label>
+            </div>
+            <div>
+              <label>Coherence (B)
+                <input type="range" id="cohB" min="0" max="10" step="1" value="6">
+              </label>
+              <label>Steelman (B)
+                <input type="range" id="stmB" min="0" max="10" step="1" value="6">
+              </label>
+              <label>Tone (B)
+                <input type="range" id="tonB" min="0" max="10" step="1" value="6">
+              </label>
+            </div>
+          </div>
+
+          <div class="row">
+            <label class="note">Jury clarity vote:
+              <select id="juryClarity">
+                <option value="A">A clearer</option>
+                <option value="B">B clearer</option>
+                <option value="tie">Tie</option>
+              </select>
+            </label>
+            <button class="btn tiny" id="submitScores">Finalize</button>
+          </div>
+        </div>
+      `;
+
+      document.getElementById('submitScores').addEventListener('click', () => {
+        const s = {
+          A: {
+            coherence: +document.getElementById('cohA').value,
+            steelman:  +document.getElementById('stmA').value,
+            tone:      +document.getElementById('tonA').value
+          },
+          B: {
+            coherence: +document.getElementById('cohB').value,
+            steelman:  +document.getElementById('stmB').value,
+            tone:      +document.getElementById('tonB').value
+          },
+          jury: document.getElementById('juryClarity').value
+        };
+        writeArchiveSummary(s);
+        setState('archive');
+      });
+    }
+
+    function writeArchiveSummary(scores) {
+      const totalA = scores.A.coherence + scores.A.steelman + scores.A.tone;
+      const totalB = scores.B.coherence + scores.B.steelman + scores.B.tone;
+      const winner = totalA === totalB ? 'Tie' : (totalA > totalB ? 'A' : 'B');
+
+      // Stage summary card
+      const mount = document.getElementById('judgeMount');
+      if(mount){
+        mount.innerHTML = `
+          <div class="summary-card">
+            <div class="note">Judge Summary</div>
+            <div>A — C:${scores.A.coherence} · S:${scores.A.steelman} · T:${scores.A.tone} = <strong>${totalA}</strong></div>
+            <div>B — C:${scores.B.coherence} · S:${scores.B.steelman} · T:${scores.B.tone} = <strong>${totalB}</strong></div>
+            <div>Jury clarity: <strong>${scores.jury.toUpperCase()}</strong></div>
+            <div>Result: <strong>${winner}</strong></div>
+          </div>
+        `;
+      }
+
+      // Also append to Archives route
+      const results = document.getElementById('searchResults');
+      if(results){
+        const card = document.createElement('div');
+        card.className = 'summary-card';
+        card.innerHTML = `
+          <div class="note">Archive — ${new Date().toLocaleString()}</div>
+          <div>Winner: <strong>${winner}</strong></div>
+          <div>A — C:${scores.A.coherence} · S:${scores.A.steelman} · T:${scores.A.tone} = <strong>${totalA}</strong></div>
+          <div>B — C:${scores.B.coherence} · S:${scores.B.steelman} · T:${scores.B.tone} = <strong>${totalB}</strong></div>
+          <div>Jury clarity: <strong>${scores.jury.toUpperCase()}</strong></div>
+        `;
+        results.prepend(card);
+      }
+
+      /* ▶ TODO:
+         - POST scores to /api/judge with matchId + rubric to persist
+         - Emit WS event “match.finalized” for live spectators
+      */
+    }
+
+    // Intensity toggle (double-click)
+    intensityBadge.addEventListener('dblclick', ()=>{
+      if(intensityBadge.textContent === 'STANDARD'){
+        intensityBadge.textContent = 'HIGH-INTENSITY'; matureBanner.hidden = false; saveState();
+      } else {
+        intensityBadge.textContent = 'STANDARD'; matureBanner.hidden = true; saveState();
+      }
+      // ▶ TODO: CONSENT_SET + INTENSITY_SET events → audit log
+    });
+    document.getElementById('revokeConsent')?.addEventListener('click', ()=>{ matureBanner.hidden = true; intensityBadge.textContent = 'STANDARD'; saveState(); });
+
+    /* ==============================
+       Round Engine Spec + Driver (A1)
+       ============================== */
+    const ROUND_ENGINE_SPEC = {
+      states: ['lobby','intro','opening_A','opening_B','cross_A','cross_B','rebuttal_A','rebuttal_B','steelman_A','steelman_B','closing_A','closing_B','judge','archive','paused','cancelled'],
+      livePhases: ['opening_A','opening_B','cross_A','cross_B','rebuttal_A','rebuttal_B','steelman_A','steelman_B','closing_A','closing_B','judge'],
+      timers: { opening:90, cross:60, rebuttal:60, steelman:60, closing:45 },
+      events: ['CREATE_MATCH','START','ADVANCE','PAUSE','RESUME','TIMEOUT','FORFEIT','ABORT','ELEVATE_QUESTION','CONSENT_SET','INTENSITY_SET','SCORE_SUBMIT','JURY_VOTE','FINALIZE'],
+      guards: ['hasConsentAll','timerActive','hostOnly','roundComplete']
+    };
+
+    const PHASE_SEQUENCE = ['lobby','intro','opening_A','opening_B','cross_A','cross_B','rebuttal_A','rebuttal_B','steelman_A','steelman_B','closing_A','closing_B','judge','archive'];
+    const LIVE = new Set(ROUND_ENGINE_SPEC.livePhases);
+    const stateBadge = document.getElementById('stateBadge');
+    const timerBadge = document.getElementById('timerBadge');
+    const btnStart   = document.getElementById('btnStart');
+    const btnAdvance = document.getElementById('btnAdvance');
+    const btnPause   = document.getElementById('btnPause');
+    const btnResume  = document.getElementById('btnResume');
+    const btnReset   = document.getElementById('btnReset');
+
+    let engine = { match: { state:'lobby', intensity:'standard', roundActive:false, timer:{ dur:0, remaining:0, running:false, id:null } } };
+    function phaseTimerFor(state){
+      if(state.startsWith('opening')) return ROUND_ENGINE_SPEC.timers.opening;
+      if(state.startsWith('cross')) return ROUND_ENGINE_SPEC.timers.cross;
+      if(state.startsWith('rebuttal')) return ROUND_ENGINE_SPEC.timers.rebuttal;
+      if(state.startsWith('steelman')) return ROUND_ENGINE_SPEC.timers.steelman;
+      if(state.startsWith('closing')) return ROUND_ENGINE_SPEC.timers.closing;
+      if(state==='judge') return 30;
+      return 0;
+    }
+    function isLive(state){ return LIVE.has(state); }
+    function nextPhase(cur){ const idx = PHASE_SEQUENCE.indexOf(cur); return (idx<0 || idx===PHASE_SEQUENCE.length-1) ? cur : PHASE_SEQUENCE[idx+1]; }
+
+    function setState(newState){
+      engine.match.state = newState;
+
+      // Phase boundary reached: publish approved cross-exam items
+      publishApproved();
+
+      // Mirror + badges
+      roundActive.checked = isLive(newState);
+      updateIsolation();
+      stateBadge.textContent = `STATE: ${newState}`;
+
+      // Timer handling
+      const dur = phaseTimerFor(newState);
+      if(engine.match.timer.id){ clearInterval(engine.match.timer.id); engine.match.timer.id=null; }
+      engine.match.timer.dur = dur; engine.match.timer.remaining = dur; engine.match.timer.running = false; renderTimer();
+      if(dur>0 && isLive(newState)) startTimer();
+
+      // Mirror policy
+      mirrorState.innerHTML = `Read-Only Mirror: <strong>${isLive(newState) ? 'ON' : 'OFF'}</strong> <span class="note">${isLive(newState) ? '(debaters cannot see lanes while active)' : '(post-round review unlocked)'}<\/span>`;
+
+      // Judge panel (role-gated)
+      if(newState === 'judge') {
+        if(isArchitect()) {
+          renderJudgePanel();
+        } else {
+          const jm=document.getElementById('judgeMount');
+          if(jm){ jm.innerHTML = '<div class="note">Judging in progress — results will appear after finalization.</div>'; }
+        }
+      } else {
+        const jm=document.getElementById('judgeMount'); if(jm) jm.innerHTML='';
+      }
+
+      // ▶ TODO: emit event to backend: ADVANCE/PAUSE/RESUME/FINALIZE (matchId, byRole)
+    }
+
+    function renderTimer(){
+      const r=Math.max(0,Math.floor(engine.match.timer.remaining));
+      const mm=String(Math.floor(r/60)).padStart(2,'0');
+      const ss=String(r%60).padStart(2,'0');
+      timerBadge.textContent=`⏱ ${mm}:${ss}`;
+    }
+    function tick(){ if(!engine.match.timer.running) return; engine.match.timer.remaining -= 1; renderTimer(); if(engine.match.timer.remaining<=0){ stopTimer(); setState(nextPhase(engine.match.state)); } }
+    function startTimer(){ if(engine.match.timer.running || engine.match.timer.dur===0) return; engine.match.timer.running=true; engine.match.timer.id=setInterval(tick,1000); }
+    function stopTimer(){ engine.match.timer.running=false; if(engine.match.timer.id){ clearInterval(engine.match.timer.id); engine.match.timer.id=null; } }
+
+    // Host-only buttons (role-gated at DOM level too)
+    btnStart?.addEventListener('click', ()=>{ if(engine.match.state==='lobby') setState('intro'); else if(engine.match.state==='intro') setState('opening_A'); else startTimer(); saveState(); });
+    btnAdvance?.addEventListener('click', ()=>{ stopTimer(); setState(nextPhase(engine.match.state)); saveState(); });
+    btnPause?.addEventListener('click', ()=>{ stopTimer(); saveState(); });
+    btnResume?.addEventListener('click', ()=>{ startTimer(); saveState(); });
+    btnReset?.addEventListener('click', ()=>{ stopTimer(); setState('lobby'); saveState(); });
+
+    function loadEngineFromUI(){ const s = roundActive.checked ? 'opening_A' : 'lobby'; setState(s); }
+    loadEngineFromUI();
+
+    /* ==============================
+       Minimal hash router + Role/Admin gates
+       ============================== */
+    const routes = Array.from(document.querySelectorAll('section.route'));
+    const navlinks = Array.from(document.querySelectorAll('nav.primary .navlink'));
+    const routeBadge = document.getElementById('routeBadge');
+    const roleSelect = document.getElementById('roleSelect');
+    const ADMIN_ROLE = 'architect';
+    const ROLE_KEY = 'vei_role';
+
+    function setRole(v){ try{ localStorage.setItem(ROLE_KEY, v); }catch(e){} if(roleSelect) roleSelect.value=v; gateAdmin(); gateRoleUI(); }
+    function getRole(){ try{ return localStorage.getItem(ROLE_KEY) || 'guest'; }catch(e){ return 'guest'; } }
+    function isArchitect(){ return getRole() === 'architect'; }
+
+    roleSelect?.addEventListener('change', ()=> setRole(roleSelect.value));
+
+    function setRoute(name){
+      routes.forEach(s=>s.classList.toggle('active', s.dataset.route===name));
+      navlinks.forEach(a=>a.classList.toggle('active', a.dataset.route===name));
+      routeBadge.textContent = `route: ${name}`;
+      history.replaceState(null, '', name==='home' ? '#' : `#${name}`);
+      document.title = `VEI Netw0rk — ${name}`;
+      window.scrollTo({ top:0, behavior:'smooth' });
+      gateAdmin();
+      gateRoleUI();
+    }
+    function readRoute(){
+      const hash = (location.hash||'').replace('#','').trim();
+      const name = ['home','dojo','lantern','archives','gov','about','admin'].includes(hash) ? hash : 'home';
+      setRoute(name);
+    }
+    window.addEventListener('hashchange', readRoute);
+    window.addEventListener('hashchange', gateRoleUI);
+    navlinks.forEach(b=>b.addEventListener('click', ()=> setRoute(b.dataset.route)));
+
+    // Admin route gate (architect-only)
+    function gateAdmin(){
+      const role = getRole();
+      const grid = document.getElementById('adminGrid');
+      const forb = document.getElementById('adminForbidden');
+      const adminRouteActive = document.querySelector('[data-route="admin"]').classList.contains('active');
+      if(adminRouteActive){ grid.hidden = (role !== ADMIN_ROLE); forb.hidden = (role === ADMIN_ROLE); }
+    }
+
+    // Host-only control visibility
+    function gateRoleUI(){
+      const hostEls = document.querySelectorAll('[data-host-only]');
+      const on = isArchitect();
+      hostEls.forEach(el => {
+        // Hide controls for non-architects
+        el.hidden = !on;
+
+        // If you prefer disabling instead of hiding:
+        // el.hidden = false; el.classList.toggle('host-disabled', !on); el.disabled = !on;
+      });
+    }
+
+    // Init role & routing
+    setRole(getRole());
+    readRoute();
+
+    /* ==============================
+       Chat Dock (local mock)
+       ============================== */
+    const chatToggle = document.getElementById('chatToggle');
+    const chatDock   = document.getElementById('chatDock');
+    const chatClose  = document.getElementById('chatClose');
+    const chatBody   = document.getElementById('chatBody');
+    const chatInput  = document.getElementById('chatInput');
+    const chatSend   = document.getElementById('chatSend');
+
+    function openChat(){ chatDock.classList.add('active'); chatToggle.setAttribute('aria-expanded','true'); chatInput.focus(); }
+    function closeChat(){ chatDock.classList.remove('active'); chatToggle.setAttribute('aria-expanded','false'); }
+    chatToggle?.addEventListener('click', ()=> chatDock.classList.contains('active') ? closeChat() : openChat());
+    chatClose?.addEventListener('click', closeChat);
+    document.addEventListener('keydown', (e)=>{ if((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==='k'){ e.preventDefault(); chatDock.classList.contains('active') ? closeChat() : openChat(); }});
+
+    function pushMsg(author, text){
+      const wrap = document.createElement('div'); wrap.className='msg';
+      const from = document.createElement('div'); from.className='from'; from.textContent = author;
+      const body = document.createElement('div'); body.textContent = text;
+      wrap.appendChild(from); wrap.appendChild(body); chatBody.appendChild(wrap);
+      chatBody.scrollTop = chatBody.scrollHeight;
+    }
+    function send(){ const v = chatInput.value.trim(); if(!v) return; chatInput.value=''; pushMsg('you', v); setTimeout(()=> pushMsg('sensei', 'Noted. (This is a local mock for V1 shell.)'), 400); }
+    chatSend?.addEventListener('click', send);
+    chatInput?.addEventListener('keydown', (e)=>{ if(e.key==='Enter'){ send(); }});
+  </script>
+</body>
+</html>

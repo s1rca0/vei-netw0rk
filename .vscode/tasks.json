@@ -1,0 +1,26 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Validate: assets_pub (bash)",
+      "type": "shell",
+      "command": "./tools/verify_assets.sh",
+      "args": ["assets_pub/*"],
+      "problemMatcher": []
+    },
+    {
+      "label": "Validate: assets_pub (node wrapper)",
+      "type": "shell",
+      "command": "node",
+      "args": ["functions/saveRecording.js", "assets_pub/*"],
+      "problemMatcher": []
+    },
+    {
+      "label": "Publish: move work → pub",
+      "type": "shell",
+      "command": "bash",
+      "args": ["-lc", "mv assets_work/* assets_pub/ 2>/dev/null || true; echo 'Moved any work files to assets_pub'"],
+      "problemMatcher": []
+    }
+  ]
+}
