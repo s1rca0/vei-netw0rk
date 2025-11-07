@@ -396,6 +396,7 @@ Read-Only Mirror Policy:
             <button class="btn tiny" id="opsListMatches">List matches</button>
             <button class="btn tiny" id="opsForcePause">Force pause</button>
             <button class="btn tiny" id="opsForceEnd">Force end</button>
+            <button class="btn tiny" id="opsTestJudge">Test /api/judge</button>
           </div>
           <div id="opsOut" class="queue"></div>
           <!-- ▶ TODO: wire to /api/matches (list/pause/end). Auth required (architect). -->
@@ -473,6 +474,36 @@ Read-Only Mirror Policy:
   </footer>
 
   <script>
+    // ==============================
+    // Backend wiring
+    // ==============================
+    const API_BASE = "https://vei-backend-production.up.railway.app";
+
+    async function api(path, options = {}) {
+      const res = await fetch(API_BASE + path, {
+        headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+        ...options
+      });
+      if (!res.ok) throw new Error(`API ${path} -> ${res.status}`);
+      return res.json();
+    }
+
+    // Optional smoke test callable from UI
+    async function testJudgeAPI(){
+      try{
+        const out = await api("/api/judge", {
+          method: "POST",
+          body: JSON.stringify({
+            A: { coherence: 6, steelman: 7, tone: 7 },
+            B: { coherence: 5, steelman: 6, tone: 6 }
+          })
+        });
+        alert(`Winner: ${out.winner} — A:${out.totals.A} B:${out.totals.B}`);
+      }catch(err){
+        alert("API error: " + err.message);
+      }
+    }
+
     /* ==============================
        Matrix rain backdrop
        ============================== */
@@ -486,12 +517,13 @@ Read-Only Mirror Policy:
       y = Array(cols).fill(0);
     }
     function draw(){
-      ctx.fillStyle = 'rgba(0,0,0,0.08)'; ctx.fillRect(0,0,w,h);
+      ctx.fillStyle = 'rgba(0,0,0,0.04)'; // slower fade for smoother trails
+      ctx.fillRect(0,0,w,h);
       ctx.fillStyle = '#00FF95';
       for(let i=0;i<cols;i++){
         const ch = String.fromCharCode(0x30A0 + Math.random()*96);
         ctx.fillText(ch, i*14, y[i]*14);
-        y[i] = (y[i]*14 > h || Math.random() > 0.975) ? 0 : y[i]+1;
+        y[i] = (y[i]*14 > h || Math.random() > 0.985) ? 0 : y[i]+0.5; // slower drop
       }
       requestAnimationFrame(draw);
     }
@@ -718,6 +750,20 @@ Read-Only Mirror Policy:
       const totalB = scores.B.coherence + scores.B.steelman + scores.B.tone;
       const winner = totalA === totalB ? 'Tie' : (totalA > totalB ? 'A' : 'B');
 
+      // Fire-and-forget store to backend (V1: no matchId yet)
+      api("/api/judge", {
+        method: "POST",
+        body: JSON.stringify({
+          A: scores.A,
+          B: scores.B,
+          jury: scores.jury || "tie"
+        })
+      }).then(r => {
+        console.log("Stored judge result:", r);
+      }).catch(err => {
+        console.warn("API /api/judge failed:", err);
+      });
+
       // Stage summary card
       const mount = document.getElementById('judgeMount');
       if(mount){
@@ -913,6 +959,45 @@ Read-Only Mirror Policy:
     // Init role & routing
     setRole(getRole());
     readRoute();
+
+    // Admin test hook
+    document.getElementById('opsTestJudge')?.addEventListener('click', testJudgeAPI);
+
+    // Admin Ops → hook buttons to backend
+    const opsOut = document.getElementById('opsOut');
+
+    function renderOpsLine(text){
+      const div = document.createElement('div');
+      div.className = 'item';
+      div.textContent = text;
+      opsOut?.prepend(div);
+    }
+
+    document.getElementById('opsListMatches')?.addEventListener('click', async ()=>{
+      try{
+        const res = await api('/api/matches');
+        const lines = res.items.map(m=>`#${m.id} — ${m.topic} [${m.state}]`);
+        renderOpsLine(lines.length ? lines.join('  |  ') : 'No matches');
+      }catch(err){ renderOpsLine('List failed: '+err.message); }
+    });
+
+    document.getElementById('opsForcePause')?.addEventListener('click', async ()=>{
+      const id = prompt('Match ID to pause?', 'demo-1');
+      if(!id) return;
+      try{
+        const r = await api(`/api/matches/${encodeURIComponent(id)}/pause`, { method:'POST' });
+        renderOpsLine(`Paused ${r.id} → state=${r.state}`);
+      }catch(err){ renderOpsLine('Pause failed: '+err.message); }
+    });
+
+    document.getElementById('opsForceEnd')?.addEventListener('click', async ()=>{
+      const id = prompt('Match ID to end?', 'demo-1');
+      if(!id) return;
+      try{
+        const r = await api(`/api/matches/${encodeURIComponent(id)}/end`, { method:'POST' });
+        renderOpsLine(`Ended ${r.id} → state=${r.state}`);
+      }catch(err){ renderOpsLine('End failed: '+err.message); }
+    });
 
     /* ==============================
        Chat Dock (local mock)
