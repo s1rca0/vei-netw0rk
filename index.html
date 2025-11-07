@@ -401,6 +401,8 @@ Read-Only Mirror Policy:
             <button class="btn tiny" id="opsSignIn">Sign as Architect</button>
             <button class="btn tiny" id="opsVerify">Verify access</button>
             <button class="btn tiny" id="opsSignOut">Sign out</button>
+            <button class="btn tiny" id="wsStart">WS Start</button>
+            <button class="btn tiny" id="wsAdvance">WS Advance</button>
           </div>
           <div id="opsOut" class="queue"></div>
           <!-- ▶ TODO: wire to /api/matches (list/pause/end). Auth required (architect). -->
@@ -477,16 +479,25 @@ Read-Only Mirror Policy:
     Tip: Double-click a file in Explorer to pin its tab. Disable preview via <code class="kbd">Settings → workbench.editor.enablePreview</code>.
   </footer>
 
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
   <script>
     // ==============================
     // Backend wiring
     // ==============================
     const API_BASE = "https://vei-backend-production.up.railway.app";
 
+    // Shared Socket.IO client (must be defined before any socket.on listeners)
+    const socket = io("https://vei-backend-production.up.railway.app", {
+      transports: ["websocket"]
+      // auth: { token: getToken() } // when we secure chat
+    });
+
 // JWT storage helpers
 function getToken(){ try { return localStorage.getItem('vei_jwt') || ''; } catch { return ''; } }
 function setToken(t){ try { localStorage.setItem('vei_jwt', t); } catch {} }
 function clearToken(){ try { localStorage.removeItem('vei_jwt'); } catch {} }
+// Track the current working match id for admin actions
+let CURRENT_MATCH_ID = '';
 
 // Unified API helper that attaches the token
 async function api(path, options = {}) {
@@ -1004,6 +1015,25 @@ async function verifyAccess(){
     document.getElementById('opsVerify')?.addEventListener('click', verifyAccess);
     document.getElementById('opsSignOut')?.addEventListener('click', signOut);
 
+    // Architect-only WS control socket (passes JWT)
+    const arenaSocket = io("https://vei-backend-production.up.railway.app/arena", {
+      transports: ["websocket"],
+      auth: { token: getToken() }
+    });
+
+    document.getElementById('wsStart')?.addEventListener('click', ()=>{
+      const id = prompt('Match ID to start?');
+      if(!id) return;
+      arenaSocket.emit('match:start', { id });
+    });
+
+    document.getElementById('wsAdvance')?.addEventListener('click', ()=>{
+      const id = prompt('Match ID to advance?');
+      if(!id) return;
+      // No explicit target -> server stepper advances to next phase
+      arenaSocket.emit('match:advance', { id });
+    });
+
     // Admin Ops → hook buttons to backend
     const opsOut = document.getElementById('opsOut');
 
@@ -1013,6 +1043,23 @@ async function verifyAccess(){
       div.textContent = text;
       opsOut?.prepend(div);
     }
+    // Spectator realtime feed (match events)
+    socket.on('match.created', (m) => {
+      CURRENT_MATCH_ID = m.id;
+      renderOpsLine(`WS created #${m.id} — ${m.topic} [${m.state}]`);
+    });
+
+    socket.on('match.state', (m) => {
+      renderOpsLine(`WS state #${m.id} → ${m.state}`);
+      // Mirror server-driven phase in UI
+      if (typeof setState === 'function' && m.state) setState(m.state);
+    });
+
+    socket.on('match.finalized', (m) => {
+      const id = m.matchId || '(unknown)';
+      renderOpsLine(`WS finalized #${id} — winner: ${m.winner} (A:${m.totals.A} B:${m.totals.B})`);
+      if (typeof setState === 'function') setState('archive');
+    });
 
     document.getElementById('opsCreate')?.addEventListener('click', async ()=>{
       const topic = prompt('Topic for new match?', 'Does truth have an intrinsic thermodynamic signature?');
@@ -1052,6 +1099,84 @@ async function verifyAccess(){
       }catch(err){ renderOpsLine('End failed: '+err.message); }
     });
 
+    // ==============================
+    // Admin -> Observability
+    // ==============================
+    const obsBtn = document.getElementById('obsPulse');
+    const obsOut = document.getElementById('obsOut');
+
+    function renderObsLine(text){
+      const div = document.createElement('div');
+      div.className = 'item';
+      div.textContent = text;
+      obsOut?.prepend(div);
+    }
+    function now(){ return performance.now(); }
+    function dur(ms){ return `${ms.toFixed(0)} ms`; }
+
+    async function obsPulse(){
+      obsOut && (obsOut.innerHTML = "");
+      // /health
+      try{
+        const t0 = now();
+        const r = await fetch(API_BASE + "/health", { method:"GET" });
+        const t1 = now();
+        const j = await r.json().catch(()=>({}));
+        renderObsLine(`health: ok=${j.ok===true ? "true" : "?"} • ${dur(t1 - t0)}`);
+      }catch(err){
+        renderObsLine(`health: ERROR ${String(err)}`);
+      }
+      // /api/dbtest
+      try{
+        const t0 = now();
+        const r = await fetch(API_BASE + "/api/dbtest", { method:"GET" });
+        const t1 = now();
+        const j = await r.json();
+        renderObsLine(`dbtest: connected=${j.connected ? "true" : "false"} • time=${j.time} • ${dur(t1 - t0)}`);
+      }catch(err){
+        renderObsLine(`dbtest: ERROR ${String(err)}`);
+      }
+    }
+    obsBtn?.addEventListener('click', obsPulse);
+
+    // ==============================
+    // Admin -> Security (show active headers)
+    // ==============================
+    const secShowHeadersBtn = document.getElementById('secShowHeaders');
+    const secOut = document.getElementById('secOut');
+
+    function renderSecLine(text){
+      const div = document.createElement('div');
+      div.className = 'item';
+      div.textContent = text;
+      secOut?.prepend(div);
+    }
+
+    async function showHeaders(){
+      secOut && (secOut.innerHTML = "");
+      try{
+        const res = await fetch("/", { method:"HEAD", cache:"no-store" });
+        const keys = [
+          "strict-transport-security",
+          "content-security-policy",
+          "x-frame-options",
+          "x-content-type-options",
+          "referrer-policy",
+          "permissions-policy",
+          "cross-origin-embedder-policy",
+          "cross-origin-opener-policy",
+          "cross-origin-resource-policy"
+        ];
+        keys.forEach(k=>{
+          const v = res.headers.get(k);
+          renderSecLine(`${k}: ${v ?? "(not present)"}`);
+        });
+      }catch(err){
+        renderSecLine("headers: ERROR " + String(err));
+      }
+    }
+    secShowHeadersBtn?.addEventListener('click', showHeaders);
+
     /* ==============================
        Chat Dock (local mock)
        ============================== */
@@ -1061,6 +1186,13 @@ async function verifyAccess(){
     const chatBody   = document.getElementById('chatBody');
     const chatInput  = document.getElementById('chatInput');
     const chatSend   = document.getElementById('chatSend');
+
+    // (Socket.IO client already initialized above)
+
+// Receive broadcast messages
+socket.on("chat:msg", (m) => {
+  pushMsg(m.author || "anon", m.text || "");
+});
 
     function openChat(){ chatDock.classList.add('active'); chatToggle.setAttribute('aria-expanded','true'); chatInput.focus(); }
     function closeChat(){ chatDock.classList.remove('active'); chatToggle.setAttribute('aria-expanded','false'); }
@@ -1075,7 +1207,15 @@ async function verifyAccess(){
       wrap.appendChild(from); wrap.appendChild(body); chatBody.appendChild(wrap);
       chatBody.scrollTop = chatBody.scrollHeight;
     }
-    function send(){ const v = chatInput.value.trim(); if(!v) return; chatInput.value=''; pushMsg('you', v); setTimeout(()=> pushMsg('sensei', 'Noted. (This is a local mock for V1 shell.)'), 400); }
+    function send(){
+      const v = chatInput.value.trim();
+      if(!v) return;
+      chatInput.value='';
+      // Optimistic echo
+      pushMsg('you', v);
+      // Emit to server
+      socket.emit("chat:send", { author: "you", text: v });
+    }
     chatSend?.addEventListener('click', send);
     chatInput?.addEventListener('keydown', (e)=>{ if(e.key==='Enter'){ send(); }});
   </script>
