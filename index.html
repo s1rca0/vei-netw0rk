@@ -30,7 +30,7 @@
     body{
       margin:0; background:var(--bg); color:var(--fg);
       font-family:"JetBrains Mono", Menlo, Monaco, "Courier New", monospace;
-      overflow:hidden; /* canvas backdrop fills screen */
+      overflow:auto; /* allow page to scroll; canvas is fixed behind */
     }
 
     /* Matrix canvas backdrop */
@@ -479,18 +479,20 @@ Read-Only Mirror Policy:
     Tip: Double-click a file in Explorer to pin its tab. Disable preview via <code class="kbd">Settings → workbench.editor.enablePreview</code>.
   </footer>
 
-  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+  <script src="https://vei-backend-production.up.railway.app/socket.io/socket.io.js"></script>
   <script>
     // ==============================
     // Backend wiring
     // ==============================
     const API_BASE = "https://vei-backend-production.up.railway.app";
 
-    // Shared Socket.IO client (must be defined before any socket.on listeners)
-    const socket = io("https://vei-backend-production.up.railway.app", {
-      transports: ["websocket"]
-      // auth: { token: getToken() } // when we secure chat
-    });
+    // Safe fallback if socket.io client isn't loaded (CSP/timeout)
+    const noopSocket = { on(){}, emit(){}, off(){}, close(){} };
+
+    // Shared Socket.IO client (guarded so missing io() never crashes the app)
+    const socket = (typeof window !== 'undefined' && window.io)
+      ? io("https://vei-backend-production.up.railway.app", { transports: ["websocket"] })
+      : noopSocket;
 
 // JWT storage helpers
 function getToken(){ try { return localStorage.getItem('vei_jwt') || ''; } catch { return ''; } }
@@ -575,7 +577,8 @@ async function verifyAccess(){
       }
       requestAnimationFrame(draw);
     }
-    window.addEventListener('resize', resize); resize(); draw();
+    window.addEventListener('resize', resize);
+    window.addEventListener('load', () => { resize(); draw(); });
 
     /* ==============================
        Home — local video quick validate
@@ -1015,11 +1018,13 @@ async function verifyAccess(){
     document.getElementById('opsVerify')?.addEventListener('click', verifyAccess);
     document.getElementById('opsSignOut')?.addEventListener('click', signOut);
 
-    // Architect-only WS control socket (passes JWT)
-    const arenaSocket = io("https://vei-backend-production.up.railway.app/arena", {
-      transports: ["websocket"],
-      auth: { token: getToken() }
-    });
+    // Architect-only WS control socket (passes JWT) — guarded
+    const arenaSocket = (typeof window !== 'undefined' && window.io)
+      ? io("https://vei-backend-production.up.railway.app/arena", {
+          transports: ["websocket"],
+          auth: { token: getToken() }
+        })
+      : noopSocket;
 
     document.getElementById('wsStart')?.addEventListener('click', ()=>{
       const id = prompt('Match ID to start?');
